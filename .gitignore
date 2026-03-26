@@ -3,6 +3,9 @@
 .env
 .env.*
 
+# Docs (superpowers specs/plans)
+docs/
+
 # Data
 data/raw/
 
