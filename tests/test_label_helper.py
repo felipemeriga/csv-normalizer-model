@@ -3,6 +3,7 @@ import os
 import tempfile
 
 from csv_normalizer.label_helper import (
+    _find_column,
     build_raw_text,
     guess_date,
     load_progress,
@@ -76,3 +77,18 @@ def test_load_progress_counts_lines():
         assert load_progress(path) == 2
     finally:
         os.unlink(path)
+
+
+def test_find_column_with_accents():
+    row = {"Título": "UBER *TRIP SP", "Valor": "-25,90"}
+    assert _find_column(row, ["titulo"]) == "UBER *TRIP SP"
+
+
+def test_find_column_case_insensitive():
+    row = {"DESCRICAO": "UBER *TRIP SP"}
+    assert _find_column(row, ["descricao"]) == "UBER *TRIP SP"
+
+
+def test_find_column_nubank_title():
+    row = {"title": "Uber *Trip", "amount": "-25.90"}
+    assert _find_column(row, ["title", "descricao"]) == "Uber *Trip"

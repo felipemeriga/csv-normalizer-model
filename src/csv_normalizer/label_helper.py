@@ -9,6 +9,7 @@ Usage: python -m csv_normalizer.label_helper data/raw/nubank.csv
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 from csv_normalizer.amount import parse_brazilian_amount
@@ -65,10 +66,19 @@ def load_progress(path: str | Path) -> int:
         return sum(1 for line in f if line.strip())
 
 
+def _strip_accents(s: str) -> str:
+    """Remove accents from a string for comparison."""
+    return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+
+
 def _find_column(row: dict, candidates: list[str]) -> str | None:
-    """Find a column value by trying multiple possible column names."""
+    """Find a column value by trying multiple possible column names.
+
+    Comparison is case-insensitive and accent-insensitive.
+    """
+    normalized_candidates = [_strip_accents(c.lower().strip()) for c in candidates]
     for key in row:
-        if key.lower().strip() in [c.lower() for c in candidates]:
+        if _strip_accents(key.lower().strip()) in normalized_candidates:
             return row[key]
     return None
 
@@ -103,10 +113,11 @@ def label_file(csv_path: str, output_path: str | Path = LABELED_PATH) -> None:
         "data compra",
     ]
     desc_candidates = [
+        "title",
+        "titulo",
         "descricao",
         "description",
         "estabelecimento",
-        "titulo",
     ]
     amount_candidates = ["valor", "amount", "value", "quantia"]
 
