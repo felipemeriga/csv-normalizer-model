@@ -1,7 +1,12 @@
 """Synthetic training data generator.
 
-Takes labeled.jsonl as seed data and generates variations by randomizing
-dates, amounts, column names, delimiters, date formats, and adding noise.
+Takes labeled.jsonl as seed data and generates training-ready examples
+in chat messages format. Randomizes dates, amounts, column names,
+delimiters, date formats, and adds noise.
+
+Output format (one per line):
+{"messages": [{"role": "user", "content": "Normalize this bank transaction: ..."},
+              {"role": "assistant", "content": "{...}"}]}
 
 Usage:
     python -m csv_normalizer.generate_synthetic seed.jsonl output.jsonl --count 2000
@@ -11,6 +16,8 @@ import json
 import random
 import sys
 from pathlib import Path
+
+from csv_normalizer.schema import PROMPT_TEMPLATE
 
 # Column name variations for Brazilian banks
 COLUMN_NAMES = {
@@ -110,7 +117,7 @@ def _add_noise(text: str) -> str:
 
 
 def generate_synthetic_data(seed_path: str, output_path: str, count: int = 2000) -> None:
-    """Generate synthetic training data from seed labeled data."""
+    """Generate synthetic training data in chat messages format."""
     seeds = _load_seed(seed_path)
     if not seeds:
         raise ValueError("Seed file is empty")
@@ -140,15 +147,25 @@ def generate_synthetic_data(seed_path: str, output_path: str, count: int = 2000)
             raw_text = delim.join(f"{k}: {v}" for k, v in parts)
             raw_text = _add_noise(raw_text)
 
+            expected = {
+                "date": norm_date,
+                "merchant": seed["merchant"],
+                "description": seed["description"],
+                "amount": norm_amount,
+                "category": seed["category"],
+            }
+
             entry = {
-                "raw_text": raw_text,
-                "expected": {
-                    "date": norm_date,
-                    "merchant": seed["merchant"],
-                    "description": seed["description"],
-                    "amount": norm_amount,
-                    "category": seed["category"],
-                },
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": PROMPT_TEMPLATE.format(raw_row_text=raw_text),
+                    },
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(expected, ensure_ascii=False),
+                    },
+                ]
             }
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 

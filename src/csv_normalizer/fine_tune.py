@@ -58,10 +58,9 @@ def fine_tune(training_path: str, output_dir: str = "output/") -> None:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    # Load data
+    # Load data (messages format)
     data = load_training_data(training_path)
-    texts = [f"{d['prompt']}\n{d['response']}" for d in data]
-    dataset = Dataset.from_dict({"text": texts})
+    dataset = Dataset.from_list(data)
 
     # Quantization config
     bnb_config = BitsAndBytesConfig(
