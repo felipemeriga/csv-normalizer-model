@@ -7,7 +7,7 @@
 docs/
 
 # Data
-data/raw/
+data/
 
 # Python
 __pycache__/
