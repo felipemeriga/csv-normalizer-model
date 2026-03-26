@@ -45,20 +45,15 @@ def fine_tune(training_path: str, output_dir: str = "output/") -> None:
     """
     import torch
     from datasets import Dataset
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from transformers import (
-        AutoModelForCausalLM,
-        AutoTokenizer,
-        BitsAndBytesConfig,
-        TrainingArguments,
-    )
-    from trl import SFTTrainer
+    from peft import LoraConfig
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from trl import SFTConfig, SFTTrainer
 
     config = get_qlora_config()
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
 
-    # Load data (messages format)
+    # Load data (messages format — SFTTrainer auto-detects "messages" column)
     data = load_training_data(training_path)
     dataset = Dataset.from_list(data)
 
@@ -79,9 +74,8 @@ def fine_tune(training_path: str, output_dir: str = "output/") -> None:
         quantization_config=bnb_config,
         device_map="auto",
     )
-    model = prepare_model_for_kbit_training(model)
 
-    # LoRA config
+    # LoRA config — SFTTrainer applies it automatically
     lora_config = LoraConfig(
         r=config["r"],
         lora_alpha=config["lora_alpha"],
@@ -90,10 +84,9 @@ def fine_tune(training_path: str, output_dir: str = "output/") -> None:
         bias="none",
         task_type="CAUSAL_LM",
     )
-    model = get_peft_model(model, lora_config)
 
-    # Training arguments
-    training_args = TrainingArguments(
+    # Training config
+    training_args = SFTConfig(
         output_dir=str(output),
         num_train_epochs=config["num_train_epochs"],
         per_device_train_batch_size=config["per_device_train_batch_size"],
@@ -102,17 +95,18 @@ def fine_tune(training_path: str, output_dir: str = "output/") -> None:
         warmup_ratio=config["warmup_ratio"],
         logging_steps=config["logging_steps"],
         save_strategy="epoch",
+        max_seq_length=config["max_seq_length"],
         fp16=True,
         report_to="none",
     )
 
-    # Train
+    # Train — SFTTrainer handles LoRA wrapping and chat template formatting
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
         args=training_args,
-        max_seq_length=config["max_seq_length"],
+        peft_config=lora_config,
     )
     trainer.train()
 
