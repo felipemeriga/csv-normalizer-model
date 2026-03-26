@@ -62,7 +62,7 @@ def normalize_row_with_model(raw_text: str, model, tokenizer) -> dict | None:
     )
 
     # Decode only the generated tokens (skip the prompt)
-    generated = outputs[0][input_ids.shape[1]:]
+    generated = outputs[0][input_ids.shape[1] :]
     text = tokenizer.decode(generated, skip_special_tokens=True)
     return parse_model_output(text)
 

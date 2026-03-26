@@ -44,9 +44,7 @@ def test_normalize_row_with_model_calls_model():
         "category": "Transport",
     }
 
-    with patch(
-        "csv_normalizer.inference.parse_model_output", return_value=expected
-    ):
+    with patch("csv_normalizer.inference.parse_model_output", return_value=expected):
         mock_model = MagicMock()
         mock_tokenizer = MagicMock()
         mock_input_ids = MagicMock()
@@ -57,7 +55,5 @@ def test_normalize_row_with_model_calls_model():
         mock_model.device = "cpu"
         mock_tokenizer.decode.return_value = json.dumps(expected)
 
-        result = normalize_row_with_model(
-            "some raw text", mock_model, mock_tokenizer
-        )
+        result = normalize_row_with_model("some raw text", mock_model, mock_tokenizer)
     assert result == expected

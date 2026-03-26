@@ -91,8 +91,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) < 3:
         print(
-            "Usage: python -m csv_normalizer.normalize"
-            " <input.csv> <output.json> --adapter <path>"
+            "Usage: python -m csv_normalizer.normalize <input.csv> <output.json> --adapter <path>"
         )
         sys.exit(1)
 
