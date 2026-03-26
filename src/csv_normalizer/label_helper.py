@@ -1,12 +1,13 @@
-"""Interactive labeling helper for bank CSV transactions.
+"""Automatic labeling helper for bank CSV transactions.
 
-Reads real bank CSVs, pre-fills what it can guess, and lets the user
-confirm/correct each row. Outputs labeled.jsonl for synthetic data generation.
+Reads all CSVs from data/raw/, auto-detects fields, cleans merchant names,
+and outputs labeled.jsonl for synthetic data generation. No manual input needed.
 
-Usage: python -m csv_normalizer.label_helper data/raw/nubank.csv
+Usage: python -m csv_normalizer.label_helper [data/raw/]
 """
 
 import json
+import logging
 import re
 import sys
 import unicodedata
@@ -14,10 +15,55 @@ from pathlib import Path
 
 from csv_normalizer.amount import parse_brazilian_amount
 from csv_normalizer.csv_detect import read_csv_auto
-from csv_normalizer.schema import Category
+
+logger = logging.getLogger(__name__)
 
 LABELED_PATH = Path("data/labeled/labeled.jsonl")
-CATEGORIES = [c.value for c in Category]
+RAW_DIR = Path("data/raw")
+
+DATE_CANDIDATES = [
+    "date",
+    "data",
+    "data da compra",
+    "data transacao",
+    "data compra",
+    "data de compra",
+]
+DESC_CANDIDATES = [
+    "title",
+    "titulo",
+    "descricao",
+    "description",
+    "estabelecimento",
+    "lancamento",
+    "historico",
+]
+AMOUNT_CANDIDATES = [
+    "amount",
+    "valor",
+    "valor (em r$)",
+    "valor (r$)",
+    "value",
+    "quantia",
+]
+
+# Common prefixes in Brazilian bank descriptions to strip for merchant name
+MERCHANT_PREFIXES = re.compile(
+    r"^(PAG\*|PAGSEGURO\*|PAG \*|RCHLO\*|UBER \*|UBER\*|"
+    r"IFOOD \*|IFOOD\*|EBN \*|Ebn \*|MP \*|"
+    r"RAPPI\*|RAPPI \*|MERCPAGO\*|MERCPAGO \*|"
+    r"SQ \*|STONE \*|CIELO \*|GETNET \*|REDE \*|"
+    r"PIC PAY\*|PICPAY\*|AME\*|PAYPAL \*)",
+    re.IGNORECASE,
+)
+
+# Suffixes to strip (city codes, installment info)
+MERCHANT_SUFFIXES = re.compile(
+    r"\s+(BR|SP|RJ|MG|PR|RS|SC|BA|GO|DF|CE|PE|PA|MA|"
+    r"SAO PAULO|RIO DE JANEIRO|CURITIBA|BELO HORIZONTE|"
+    r"\d+/\d+|\d{2}/\d{2})\s*$",
+    re.IGNORECASE,
+)
 
 
 def guess_date(raw: str) -> str | None:
@@ -40,6 +86,7 @@ def guess_date(raw: str) -> str | None:
         year = 2000 + year if year < 50 else 1900 + year
         return f"{year}-{m.group(2)}-{m.group(1)}"
 
+    # DD/MM (no year — skip, ambiguous)
     return None
 
 
@@ -78,102 +125,125 @@ def _find_column(row: dict, candidates: list[str]) -> str | None:
     """
     normalized_candidates = [_strip_accents(c.lower().strip()) for c in candidates]
     for key in row:
+        if key is None:
+            continue
         if _strip_accents(key.lower().strip()) in normalized_candidates:
             return row[key]
     return None
 
 
-def _prompt_category() -> str:
-    """Show category menu and get user choice."""
-    print("\nCategories:")
-    for i, cat in enumerate(CATEGORIES, 1):
-        print(f"  {i}. {cat}")
-    while True:
-        choice = input("Category (number or name): ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(CATEGORIES):
-            return CATEGORIES[int(choice) - 1]
-        for cat in CATEGORIES:
-            if cat.lower() == choice.lower():
-                return cat
-        print("Invalid choice, try again.")
+def clean_merchant(raw_desc: str) -> str:
+    """Clean a raw bank description into a readable merchant name.
+
+    Strips common payment processor prefixes, city/state suffixes,
+    and normalizes whitespace.
+    """
+    if not raw_desc:
+        return ""
+
+    cleaned = raw_desc.strip()
+    # Strip common prefixes
+    cleaned = MERCHANT_PREFIXES.sub("", cleaned)
+    # Strip common suffixes
+    cleaned = MERCHANT_SUFFIXES.sub("", cleaned)
+    # Normalize whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # Title case if all caps
+    if cleaned == cleaned.upper() and len(cleaned) > 3:
+        cleaned = cleaned.title()
+
+    return cleaned
 
 
-def label_file(csv_path: str, output_path: str | Path = LABELED_PATH) -> None:
-    """Interactively label transactions from a CSV file."""
-    rows = read_csv_auto(csv_path)
-    skip = load_progress(output_path)
+def auto_label_file(csv_path: str, output_path: str | Path = LABELED_PATH) -> dict:
+    """Automatically label all transactions from a CSV file.
 
-    if skip > 0:
-        print(f"Resuming from row {skip + 1} ({skip} already labeled)")
+    Returns stats dict with total, labeled, skipped counts.
+    """
+    try:
+        rows = read_csv_auto(csv_path)
+    except Exception as e:
+        logger.warning("Failed to read %s: %s", csv_path, e)
+        return {"total": 0, "labeled": 0, "skipped": 0, "file": csv_path}
 
-    date_candidates = [
-        "data",
-        "date",
-        "data transacao",
-        "data compra",
-    ]
-    desc_candidates = [
-        "title",
-        "titulo",
-        "descricao",
-        "description",
-        "estabelecimento",
-    ]
-    amount_candidates = ["valor", "amount", "value", "quantia"]
+    labeled = 0
+    skipped = 0
 
-    for i, row in enumerate(rows):
-        if i < skip:
+    for row in rows:
+        # Find date
+        raw_date = _find_column(row, DATE_CANDIDATES) or ""
+        date = guess_date(raw_date) if raw_date else None
+        if not date:
+            skipped += 1
             continue
 
-        raw_text = build_raw_text(row)
-        print(f"\n--- Row {i + 1}/{len(rows)} ---")
-        print(f"Raw: {raw_text}")
+        # Find description
+        raw_desc = _find_column(row, DESC_CANDIDATES) or ""
+        if not raw_desc:
+            skipped += 1
+            continue
 
-        # Pre-fill date
-        raw_date = _find_column(row, date_candidates) or ""
-        guessed_date = guess_date(raw_date) if raw_date else None
-        if guessed_date:
-            date_input = input(f"Date [{guessed_date}]: ").strip() or guessed_date
-        else:
-            date_input = input("Date (YYYY-MM-DD): ").strip()
-
-        # Pre-fill description
-        raw_desc = _find_column(row, desc_candidates) or ""
-        print(f"Description: {raw_desc}")
-
-        # Merchant
-        merchant = input("Merchant name: ").strip()
-
-        # Category
-        category = _prompt_category()
-
-        # Amount
-        raw_amount = _find_column(row, amount_candidates) or ""
+        # Find amount
+        raw_amount = _find_column(row, AMOUNT_CANDIDATES) or ""
         try:
-            guessed_amount = parse_brazilian_amount(raw_amount) if raw_amount else None
+            amount = parse_brazilian_amount(raw_amount) if raw_amount else None
         except ValueError:
-            guessed_amount = None
+            amount = None
+        if amount is None:
+            skipped += 1
+            continue
 
-        if guessed_amount is not None:
-            amount_input = input(f"Amount [{guessed_amount}]: ").strip()
-            amount = float(amount_input) if amount_input else guessed_amount
-        else:
-            amount = float(input("Amount: ").strip())
+        # Clean merchant name
+        merchant = clean_merchant(raw_desc)
 
         entry = {
-            "raw_text": raw_text,
-            "date": date_input,
+            "raw_text": build_raw_text(row),
+            "date": date,
             "merchant": merchant,
             "description": raw_desc,
             "amount": amount,
-            "category": category,
+            "category": "Other",
         }
         save_labeled_row(output_path, entry)
-        print("  Saved")
+        labeled += 1
+
+    return {"total": len(rows), "labeled": labeled, "skipped": skipped, "file": csv_path}
+
+
+def auto_label_dir(
+    raw_dir: str | Path = RAW_DIR, output_path: str | Path = LABELED_PATH
+) -> list[dict]:
+    """Automatically label all CSVs in a directory.
+
+    Returns list of stats dicts, one per file.
+    """
+    raw_dir = Path(raw_dir)
+    all_stats = []
+
+    csv_files = sorted(raw_dir.glob("*.csv"))
+    if not csv_files:
+        print(f"No CSV files found in {raw_dir}")
+        return all_stats
+
+    print(f"Found {len(csv_files)} CSV files in {raw_dir}")
+
+    for csv_file in csv_files:
+        stats = auto_label_file(str(csv_file), output_path)
+        all_stats.append(stats)
+        print(f"  {csv_file.name}: {stats['labeled']} labeled, {stats['skipped']} skipped")
+
+    total_labeled = sum(s["labeled"] for s in all_stats)
+    total_skipped = sum(s["skipped"] for s in all_stats)
+    print(f"\nTotal: {total_labeled} labeled, {total_skipped} skipped from {len(csv_files)} files")
+
+    return all_stats
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m csv_normalizer.label_helper <csv_file>")
-        sys.exit(1)
-    label_file(sys.argv[1])
+    raw = sys.argv[1] if len(sys.argv) > 1 else str(RAW_DIR)
+    path = Path(raw)
+    if path.is_dir():
+        auto_label_dir(path)
+    else:
+        stats = auto_label_file(raw)
+        print(f"{stats['labeled']} labeled, {stats['skipped']} skipped")
